@@ -1,12 +1,12 @@
-import { useState, useRef, useCallback } from 'react'
-import { Canvas } from '@react-three/fiber'
-import { OrbitControls, Environment, ContactShadows, PresentationControls } from '@react-three/drei'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { 
   Upload, Box, Settings, Download, Play, Trash2, Eye, 
-  ChevronRight, Zap, Layers, FileCode, RefreshCw,
-  CheckCircle, Clock, AlertCircle, X, Folder, Image as ImageIcon
+  Zap, Layers, FileCode, RefreshCw,
+  CheckCircle, AlertCircle, X, Folder, Image as ImageIcon,
+  Key, ExternalLink, Loader2, ChevronDown
 } from 'lucide-react'
-import * as THREE from 'three'
+import Viewer3D from './components/Viewer3D'
+import { generate3DFromImage, type GenerationOptions } from './services/tripoApi'
 
 // Types
 interface Asset {
@@ -14,12 +14,14 @@ interface Asset {
   name: string
   imageUrl: string
   modelUrl?: string
+  renderedImage?: string
   status: 'uploading' | 'processing' | 'ready' | 'error'
   progress: number
+  progressStage: string
   createdAt: Date
   category: string
-  vertices?: number
-  triangles?: number
+  taskId?: string
+  errorMessage?: string
 }
 
 interface ApiSettings {
@@ -28,83 +30,27 @@ interface ApiSettings {
   quality: 'draft' | 'standard' | 'high'
   autoRig: boolean
   autoTexture: boolean
+  modelVersion: string
 }
 
-// Demo 3D Model Component (placeholder fish)
-function DemoModel() {
-  return (
-    <group>
-      {/* Fish body */}
-      <mesh position={[0, 0, 0]}>
-        <sphereGeometry args={[1, 32, 32]} />
-        <meshStandardMaterial color="#4a9eff" metalness={0.3} roughness={0.4} />
-      </mesh>
-      {/* Fish tail */}
-      <mesh position={[-1.2, 0, 0]} rotation={[0, 0, Math.PI / 4]}>
-        <coneGeometry args={[0.6, 1, 4]} />
-        <meshStandardMaterial color="#3b82f6" metalness={0.3} roughness={0.4} />
-      </mesh>
-      {/* Fish eye */}
-      <mesh position={[0.6, 0.3, 0.6]}>
-        <sphereGeometry args={[0.15, 16, 16]} />
-        <meshStandardMaterial color="#ffffff" />
-      </mesh>
-      <mesh position={[0.65, 0.3, 0.7]}>
-        <sphereGeometry args={[0.08, 16, 16]} />
-        <meshStandardMaterial color="#000000" />
-      </mesh>
-      {/* Fish fin */}
-      <mesh position={[0, 0.8, 0]} rotation={[0, 0, -0.3]}>
-        <boxGeometry args={[0.6, 0.4, 0.05]} />
-        <meshStandardMaterial color="#60a5fa" metalness={0.3} roughness={0.4} transparent opacity={0.8} />
-      </mesh>
-    </group>
-  )
+// Load settings from localStorage
+function loadSettings(): ApiSettings {
+  try {
+    const saved = localStorage.getItem('assetforge_settings')
+    if (saved) return JSON.parse(saved)
+  } catch {}
+  return {
+    provider: 'tripo',
+    apiKey: '',
+    quality: 'standard',
+    autoRig: true,
+    autoTexture: true,
+    modelVersion: 'v2.5-20250123',
+  }
 }
 
-function Viewer3D({ asset }: { asset: Asset | null }) {
-  return (
-    <div className="w-full h-full bg-gradient-to-b from-gray-900 to-gray-800 rounded-xl overflow-hidden relative">
-      <Canvas camera={{ position: [3, 2, 5], fov: 50 }}>
-        <ambientLight intensity={0.4} />
-        <directionalLight position={[5, 5, 5]} intensity={1} castShadow />
-        <pointLight position={[-5, 3, -5]} intensity={0.5} color="#4a9eff" />
-        
-        <PresentationControls
-          global
-          rotation={[0.1, 0.2, 0]}
-          polar={[-Math.PI / 4, Math.PI / 4]}
-          azimuth={[-Math.PI / 4, Math.PI / 4]}
-          speed={1.5}
-        >
-          <DemoModel />
-        </PresentationControls>
-        
-        <ContactShadows position={[0, -1.5, 0]} opacity={0.4} scale={10} blur={2} />
-        <Environment preset="studio" />
-        <OrbitControls enablePan={true} enableZoom={true} />
-      </Canvas>
-      
-      {asset && (
-        <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-sm rounded-lg px-3 py-2 text-white text-sm">
-          <p className="font-medium">{asset.name}</p>
-          <p className="text-gray-300 text-xs">
-            {asset.vertices ? `${asset.vertices.toLocaleString()} vertices` : 'Demo Model'} • 
-            {asset.triangles ? ` ${asset.triangles.toLocaleString()} triangles` : ' Preview'}
-          </p>
-        </div>
-      )}
-      
-      <div className="absolute top-4 right-4 flex gap-2">
-        <button className="bg-black/60 backdrop-blur-sm rounded-lg p-2 text-white hover:bg-black/80 transition">
-          <Eye size={16} />
-        </button>
-        <button className="bg-black/60 backdrop-blur-sm rounded-lg p-2 text-white hover:bg-black/80 transition">
-          <RefreshCw size={16} />
-        </button>
-      </div>
-    </div>
-  )
+function saveSettings(settings: ApiSettings) {
+  localStorage.setItem('assetforge_settings', JSON.stringify(settings))
 }
 
 export default function App() {
@@ -112,20 +58,22 @@ export default function App() {
   const [assets, setAssets] = useState<Asset[]>([])
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [assetName, setAssetName] = useState('')
   const [category, setCategory] = useState('creatures')
   const [isProcessing, setIsProcessing] = useState(false)
   const [processingProgress, setProcessingProgress] = useState(0)
   const [processingStage, setProcessingStage] = useState('')
+  const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   
-  const [settings, setSettings] = useState<ApiSettings>({
-    provider: 'tripo',
-    apiKey: '',
-    quality: 'standard',
-    autoRig: true,
-    autoTexture: true,
-  })
+  const [settings, setSettings] = useState<ApiSettings>(loadSettings)
+  const [showApiKey, setShowApiKey] = useState(false)
+
+  // Save settings whenever they change
+  useEffect(() => {
+    saveSettings(settings)
+  }, [settings])
 
   const handleImageUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -135,79 +83,130 @@ export default function App() {
         setUploadedImage(event.target?.result as string)
       }
       reader.readAsDataURL(file)
+      setUploadedFile(file)
       setAssetName(file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '))
+      setError(null)
     }
   }, [])
 
-  const simulateProcessing = useCallback(() => {
-    if (!uploadedImage) return
-    
+  const startGeneration = useCallback(async () => {
+    // Trim the API key to remove any accidental whitespace
+    const trimmedKey = settings.apiKey.trim()
+    if (!uploadedFile || !trimmedKey) {
+      if (!trimmedKey) {
+        setError('Please add your Tripo API key in Settings first!')
+        setActiveTab('settings')
+      }
+      return
+    }
+    // Update settings with trimmed key
+    if (trimmedKey !== settings.apiKey) {
+      setSettings(s => ({ ...s, apiKey: trimmedKey }))
+    }
+
     setIsProcessing(true)
     setProcessingProgress(0)
-    
-    const stages = [
-      'Analyzing image...',
-      'Detecting object boundaries...',
-      'Generating depth map...',
-      'Creating 3D mesh...',
-      'Applying textures...',
-      'Optimizing geometry...',
-      settings.autoRig ? 'Adding skeleton...' : '',
-      'Finalizing asset...',
-    ].filter(Boolean)
-    
-    let currentStage = 0
-    const interval = setInterval(() => {
-      setProcessingProgress(prev => {
-        const next = prev + Math.random() * 8 + 2
-        if (next >= 100) {
-          clearInterval(interval)
-          
-          const newAsset: Asset = {
-            id: Date.now().toString(),
-            name: assetName || 'Untitled Asset',
-            imageUrl: uploadedImage,
-            status: 'ready',
-            progress: 100,
-            createdAt: new Date(),
-            category,
-            vertices: Math.floor(Math.random() * 5000) + 2000,
-            triangles: Math.floor(Math.random() * 8000) + 4000,
-          }
-          
-          setAssets(prev => [newAsset, ...prev])
-          setSelectedAsset(newAsset)
-          setIsProcessing(false)
-          setUploadedImage(null)
-          setAssetName('')
-          return 100
+    setProcessingStage('Initializing...')
+    setError(null)
+
+    const newAsset: Asset = {
+      id: Date.now().toString(),
+      name: assetName || 'Untitled Asset',
+      imageUrl: uploadedImage!,
+      status: 'processing',
+      progress: 0,
+      progressStage: 'Starting...',
+      createdAt: new Date(),
+      category,
+    }
+
+    setAssets(prev => [newAsset, ...prev])
+    setSelectedAsset(newAsset)
+
+    try {
+      const options: GenerationOptions = {
+        quality: settings.quality,
+        autoRig: settings.autoRig,
+        autoTexture: settings.autoTexture,
+        modelVersion: settings.modelVersion,
+      }
+
+      const result = await generate3DFromImage(
+        trimmedKey,
+        uploadedFile,
+        options,
+        (progress, stage) => {
+          setProcessingProgress(progress)
+          setProcessingStage(stage)
+          setAssets(prev => prev.map(a => 
+            a.id === newAsset.id 
+              ? { ...a, progress, progressStage: stage }
+              : a
+          ))
         }
-        
-        const stageIndex = Math.floor((next / 100) * stages.length)
-        if (stageIndex !== currentStage && stageIndex < stages.length) {
-          currentStage = stageIndex
-          setProcessingStage(stages[stageIndex])
-        }
-        
-        return next
-      })
-    }, 200)
-  }, [uploadedImage, assetName, category, settings.autoRig])
+      )
+
+      // Update asset with the model URL
+      setAssets(prev => prev.map(a => 
+        a.id === newAsset.id 
+          ? { ...a, status: 'ready', progress: 100, modelUrl: result.modelUrl, renderedImage: result.renderedImage, taskId: result.taskId, progressStage: 'Complete!' }
+          : a
+      ))
+      setSelectedAsset(prev => prev?.id === newAsset.id 
+        ? { ...prev, status: 'ready', progress: 100, modelUrl: result.modelUrl, renderedImage: result.renderedImage, taskId: result.taskId, progressStage: 'Complete!' }
+        : prev
+      )
+      
+      setIsProcessing(false)
+      setUploadedImage(null)
+      setUploadedFile(null)
+      setAssetName('')
+    } catch (err: any) {
+      let errorMsg = err.message || 'Generation failed'
+      
+      // Give helpful guidance for common errors
+      if (errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('CORS')) {
+        errorMsg = 'Cannot connect to Tripo API (CORS error). You need to run this app locally with "node server.js" to proxy the API calls. See Settings tab for instructions.'
+      } else if (errorMsg.includes('401') || errorMsg.includes('Unauthorized') || errorMsg.includes('Invalid API key')) {
+        errorMsg = `Invalid API key. Tripo says: "${errorMsg}". Make sure your key starts with "tsk_" and has no extra spaces.`
+      } else if (errorMsg.includes('429')) {
+        errorMsg = 'Rate limit exceeded. Wait a moment and try again, or check your Tripo credit balance.'
+      }
+      
+      setError(errorMsg)
+      setAssets(prev => prev.map(a => 
+        a.id === newAsset.id 
+          ? { ...a, status: 'error', progressStage: 'Failed', errorMessage: errorMsg }
+          : a
+      ))
+      setSelectedAsset(prev => prev?.id === newAsset.id 
+        ? { ...prev, status: 'error', progressStage: 'Failed', errorMessage: errorMsg }
+        : prev
+      )
+      setIsProcessing(false)
+    }
+  }, [uploadedFile, uploadedImage, settings, assetName, category])
 
   const deleteAsset = (id: string) => {
     setAssets(prev => prev.filter(a => a.id !== id))
     if (selectedAsset?.id === id) setSelectedAsset(null)
   }
 
-  const exportAsset = (asset: Asset, format: string) => {
-    // In a real app, this would download the actual model file
-    const blob = new Blob([`// ${asset.name} - ${format} export\n// Generated by AssetForge\n// Vertices: ${asset.vertices}\n// Triangles: ${asset.triangles}`], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${asset.name.replace(/\s+/g, '_').toLowerCase()}.${format}`
-    a.click()
-    URL.revokeObjectURL(url)
+  const exportModel = async (asset: Asset, format: string) => {
+    if (!asset.modelUrl) return
+    try {
+      const response = await fetch(asset.modelUrl)
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${asset.name.replace(/\s+/g, '_').toLowerCase()}.${format}`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      // Fallback: open in new tab
+      window.open(asset.modelUrl, '_blank')
+    }
   }
 
   return (
@@ -222,7 +221,7 @@ export default function App() {
             <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
               AssetForge
             </h1>
-            <p className="text-xs text-gray-400">Image → 3D Game Asset Pipeline</p>
+            <p className="text-xs text-gray-400">Real Image → 3D via Tripo AI</p>
           </div>
         </div>
         
@@ -257,10 +256,43 @@ export default function App() {
             <div className="max-w-4xl mx-auto space-y-6">
               <div className="text-center mb-8">
                 <h2 className="text-3xl font-bold mb-2">Create 3D Asset</h2>
-                <p className="text-gray-400">Upload an image and convert it into a game-ready 3D model</p>
+                <p className="text-gray-400">Upload an image → Tripo AI generates a real 3D model → Preview & export</p>
               </div>
 
-              {/* Upload Area */}
+              {/* API Key Warning */}
+              {!settings.apiKey && (
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 flex items-start gap-3">
+                  <Key size={20} className="text-yellow-400 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-medium text-yellow-300">API Key Required</p>
+                    <p className="text-sm text-yellow-200/70 mt-1">
+                      You need a Tripo AI API key to generate 3D models.{' '}
+                      <button onClick={() => setActiveTab('settings')} className="underline hover:text-yellow-100">
+                        Add your key in Settings
+                      </button>
+                      {' '}— Get one free at{' '}
+                      <a href="https://platform.tripo3d.ai/api-keys" target="_blank" rel="noopener" className="underline hover:text-yellow-100">
+                        platform.tripo3d.ai
+                      </a>
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Error Display */}
+              {error && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-start gap-3">
+                  <AlertCircle size={20} className="text-red-400 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <p className="font-medium text-red-300">Error</p>
+                    <p className="text-sm text-red-200/70 mt-1">{error}</p>
+                  </div>
+                  <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300">
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+
               {!isProcessing ? (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Upload Zone */}
@@ -284,7 +316,7 @@ export default function App() {
                           className="w-full h-64 object-contain rounded-lg"
                         />
                         <button
-                          onClick={(e) => { e.stopPropagation(); setUploadedImage(null) }}
+                          onClick={(e) => { e.stopPropagation(); setUploadedImage(null); setUploadedFile(null) }}
                           className="absolute top-4 right-4 bg-red-500/80 rounded-full p-1.5 hover:bg-red-500 transition"
                         >
                           <X size={14} />
@@ -296,7 +328,7 @@ export default function App() {
                           <ImageIcon size={28} className="text-gray-400 group-hover:text-blue-400 transition" />
                         </div>
                         <p className="text-lg font-medium text-gray-300 mb-1">Drop your image here</p>
-                        <p className="text-sm text-gray-500">or click to browse • PNG, JPG, WEBP</p>
+                        <p className="text-sm text-gray-500">or click to browse • PNG, JPG, WEBP (max 10MB)</p>
                         <p className="text-xs text-gray-600 mt-2">Best results: single object on clean background</p>
                       </>
                     )}
@@ -306,7 +338,7 @@ export default function App() {
                   <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-6 space-y-5">
                     <h3 className="font-semibold text-lg flex items-center gap-2">
                       <Layers size={18} className="text-blue-400" />
-                      Asset Configuration
+                      Generation Settings
                     </h3>
                     
                     <div>
@@ -353,46 +385,56 @@ export default function App() {
                           </button>
                         ))}
                       </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {settings.quality === 'draft' && '~5K faces • Fast • Good for prototyping'}
+                        {settings.quality === 'standard' && '~adaptive • Balanced quality/speed'}
+                        {settings.quality === 'high' && '~200K faces • Detailed • Slower'}
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="text-sm text-gray-400 mb-1.5 block">Model Version</label>
+                      <select
+                        value={settings.modelVersion}
+                        onChange={(e) => setSettings(s => ({ ...s, modelVersion: e.target.value }))}
+                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500 transition"
+                      >
+                        <option value="P1-20260311">P1 (Best low-poly, ~2s mesh)</option>
+                        <option value="v3.1-20260211">v3.1 (Latest, highest quality)</option>
+                        <option value="v3.0-20250812">v3.0 (High quality)</option>
+                        <option value="v2.5-20250123">v2.5 (Stable, default)</option>
+                        <option value="Turbo-v1.0-20250506">Turbo (Fastest)</option>
+                      </select>
                     </div>
 
                     <div className="space-y-3">
                       <label className="flex items-center justify-between cursor-pointer">
-                        <span className="text-sm text-gray-300">Auto-rig (skeleton)</span>
-                        <div
-                          onClick={() => setSettings(s => ({ ...s, autoRig: !s.autoRig }))}
-                          className={`w-11 h-6 rounded-full transition-colors relative cursor-pointer ${
-                            settings.autoRig ? 'bg-blue-600' : 'bg-gray-700'
-                          }`}
-                        >
-                          <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${
-                            settings.autoRig ? 'translate-x-5.5 left-0.5' : 'left-0.5'
-                          }`} style={{ transform: settings.autoRig ? 'translateX(20px)' : 'translateX(0)' }} />
+                        <div>
+                          <span className="text-sm text-gray-300">PBR Textures</span>
+                          <p className="text-xs text-gray-500">Physically-based rendering materials</p>
                         </div>
-                      </label>
-                      <label className="flex items-center justify-between cursor-pointer">
-                        <span className="text-sm text-gray-300">Auto-texture</span>
                         <div
                           onClick={() => setSettings(s => ({ ...s, autoTexture: !s.autoTexture }))}
                           className={`w-11 h-6 rounded-full transition-colors relative cursor-pointer ${
                             settings.autoTexture ? 'bg-blue-600' : 'bg-gray-700'
                           }`}
                         >
-                          <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform`} style={{ transform: settings.autoTexture ? 'translateX(20px)' : 'translateX(0)', left: '2px' }} />
+                          <div className="absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform" style={{ transform: settings.autoTexture ? 'translateX(20px)' : 'translateX(0)', left: '2px' }} />
                         </div>
                       </label>
                     </div>
 
                     <button
-                      onClick={simulateProcessing}
-                      disabled={!uploadedImage}
+                      onClick={startGeneration}
+                      disabled={!uploadedImage || !settings.apiKey}
                       className={`w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all ${
-                        uploadedImage
+                        uploadedImage && settings.apiKey
                           ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white shadow-lg shadow-blue-600/20'
                           : 'bg-gray-800 text-gray-500 cursor-not-allowed'
                       }`}
                     >
                       <Zap size={18} />
-                      Generate 3D Model
+                      {settings.apiKey ? 'Generate 3D Model' : 'Add API Key First'}
                     </button>
                   </div>
                 </div>
@@ -400,7 +442,7 @@ export default function App() {
                 /* Processing State */
                 <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-12 text-center">
                   <div className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-blue-500/20 to-purple-500/20 rounded-2xl flex items-center justify-center">
-                    <div className="w-10 h-10 border-3 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                    <Loader2 size={36} className="text-blue-400 animate-spin" />
                   </div>
                   <h3 className="text-xl font-bold mb-2">Generating Your 3D Model</h3>
                   <p className="text-gray-400 mb-6">{processingStage || 'Initializing...'}</p>
@@ -408,7 +450,7 @@ export default function App() {
                   <div className="max-w-md mx-auto">
                     <div className="h-3 bg-gray-800 rounded-full overflow-hidden mb-3">
                       <div
-                        className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-300"
+                        className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-500"
                         style={{ width: `${processingProgress}%` }}
                       />
                     </div>
@@ -416,23 +458,37 @@ export default function App() {
                   </div>
 
                   {uploadedImage && (
-                    <div className="mt-8 flex justify-center">
-                      <img src={uploadedImage} alt="Source" className="w-32 h-32 object-contain rounded-xl border border-gray-700" />
+                    <div className="mt-8 flex justify-center gap-8 items-center">
+                      <div className="text-center">
+                        <img src={uploadedImage} alt="Source" className="w-28 h-28 object-contain rounded-xl border border-gray-700" />
+                        <p className="text-xs text-gray-500 mt-2">Input Image</p>
+                      </div>
+                      <div className="text-2xl text-gray-600">→</div>
+                      <div className="text-center">
+                        <div className="w-28 h-28 rounded-xl border border-gray-700 border-dashed flex items-center justify-center">
+                          <Loader2 size={24} className="text-blue-400 animate-spin" />
+                        </div>
+                        <p className="text-xs text-gray-500 mt-2">3D Model</p>
+                      </div>
                     </div>
                   )}
+
+                  <p className="text-xs text-gray-600 mt-6">
+                    This typically takes 30-90 seconds depending on quality settings
+                  </p>
                 </div>
               )}
 
               {/* How it works */}
               {!isProcessing && !uploadedImage && (
                 <div className="bg-gray-900/30 border border-gray-800 rounded-2xl p-8 mt-8">
-                  <h3 className="text-lg font-semibold mb-6 text-center">How It Works</h3>
+                  <h3 className="text-lg font-semibold mb-6 text-center">How It Works (Real API)</h3>
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                     {[
-                      { icon: Upload, title: 'Upload Image', desc: 'Drop any image of your object' },
-                      { icon: Zap, title: 'AI Processing', desc: 'Tripo/Meshy generates the mesh' },
-                      { icon: Eye, title: 'Preview & Edit', desc: 'View in 3D, adjust settings' },
-                      { icon: Download, title: 'Export', desc: 'Download as GLB, OBJ, FBX' },
+                      { icon: Upload, title: '1. Upload Image', desc: 'Your image is sent to Tripo AI servers' },
+                      { icon: Zap, title: '2. AI Generation', desc: 'Tripo generates real 3D mesh + textures' },
+                      { icon: Eye, title: '3. Preview in 3D', desc: 'View the actual GLB model in the viewer' },
+                      { icon: Download, title: '4. Export GLB', desc: 'Download real .glb file for your game' },
                     ].map((step, i) => (
                       <div key={i} className="text-center">
                         <div className="w-12 h-12 bg-blue-500/10 border border-blue-500/20 rounded-xl flex items-center justify-center mx-auto mb-3">
@@ -442,6 +498,12 @@ export default function App() {
                         <p className="text-xs text-gray-500">{step.desc}</p>
                       </div>
                     ))}
+                  </div>
+                  <div className="mt-6 p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl">
+                    <p className="text-sm text-blue-300">
+                      💡 <strong>This is a real pipeline</strong> — not a simulation. When you upload an image and click Generate, 
+                      it calls the Tripo AI API to create an actual 3D model from your image. You'll see the real generated model in the viewer.
+                    </p>
                   </div>
                 </div>
               )}
@@ -455,20 +517,13 @@ export default function App() {
                   <h2 className="text-2xl font-bold">Asset Library</h2>
                   <p className="text-gray-400 text-sm">{assets.length} assets generated</p>
                 </div>
-                <div className="flex gap-2">
-                  {['all', 'creatures', 'characters', 'weapons', 'environment'].map(cat => (
-                    <button key={cat} className="px-3 py-1.5 bg-gray-800 rounded-lg text-xs font-medium text-gray-400 hover:text-white hover:bg-gray-700 transition capitalize">
-                      {cat}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               {assets.length === 0 ? (
                 <div className="text-center py-20">
                   <Folder size={48} className="mx-auto text-gray-700 mb-4" />
                   <p className="text-gray-400 text-lg">No assets yet</p>
-                  <p className="text-gray-600 text-sm mt-1">Upload an image to create your first 3D asset</p>
+                  <p className="text-gray-600 text-sm mt-1">Upload an image to generate your first real 3D asset</p>
                   <button
                     onClick={() => setActiveTab('upload')}
                     className="mt-4 px-4 py-2 bg-blue-600 rounded-lg text-sm font-medium hover:bg-blue-500 transition"
@@ -481,7 +536,7 @@ export default function App() {
                   {assets.map(asset => (
                     <div
                       key={asset.id}
-                      onClick={() => setSelectedAsset(asset)}
+                      onClick={() => asset.status === 'ready' && setSelectedAsset(asset)}
                       className={`bg-gray-900/50 border rounded-xl p-4 cursor-pointer transition-all hover:border-blue-500/50 ${
                         selectedAsset?.id === asset.id ? 'border-blue-500 ring-1 ring-blue-500/20' : 'border-gray-800'
                       }`}
@@ -492,34 +547,41 @@ export default function App() {
                           <h4 className="font-medium truncate">{asset.name}</h4>
                           <p className="text-xs text-gray-500 capitalize">{asset.category}</p>
                           <div className="flex items-center gap-2 mt-2">
-                            <span className="flex items-center gap-1 text-xs text-green-400">
-                              <CheckCircle size={12} /> Ready
-                            </span>
-                            <span className="text-xs text-gray-600">•</span>
-                            <span className="text-xs text-gray-500">{asset.vertices?.toLocaleString()} verts</span>
+                            {asset.status === 'ready' && (
+                              <span className="flex items-center gap-1 text-xs text-green-400">
+                                <CheckCircle size={12} /> Ready
+                              </span>
+                            )}
+                            {asset.status === 'processing' && (
+                              <span className="flex items-center gap-1 text-xs text-blue-400">
+                                <Loader2 size={12} className="animate-spin" /> {Math.round(asset.progress)}%
+                              </span>
+                            )}
+                            {asset.status === 'error' && (
+                              <span className="flex items-center gap-1 text-xs text-red-400">
+                                <AlertCircle size={12} /> Failed
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
-                      <div className="flex gap-2 mt-3">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); exportAsset(asset, 'glb') }}
-                          className="flex-1 py-1.5 bg-gray-800 rounded-lg text-xs font-medium text-gray-300 hover:bg-gray-700 transition flex items-center justify-center gap-1"
-                        >
-                          <Download size={12} /> GLB
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); exportAsset(asset, 'obj') }}
-                          className="flex-1 py-1.5 bg-gray-800 rounded-lg text-xs font-medium text-gray-300 hover:bg-gray-700 transition flex items-center justify-center gap-1"
-                        >
-                          <Download size={12} /> OBJ
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); deleteAsset(asset.id) }}
-                          className="py-1.5 px-2 bg-red-500/10 rounded-lg text-red-400 hover:bg-red-500/20 transition"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
+                      
+                      {asset.status === 'ready' && (
+                        <div className="flex gap-2 mt-3">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); exportModel(asset, 'glb') }}
+                            className="flex-1 py-1.5 bg-blue-600 rounded-lg text-xs font-medium text-white hover:bg-blue-500 transition flex items-center justify-center gap-1"
+                          >
+                            <Download size={12} /> Download GLB
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteAsset(asset.id) }}
+                            className="py-1.5 px-2 bg-red-500/10 rounded-lg text-red-400 hover:bg-red-500/20 transition"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -530,60 +592,21 @@ export default function App() {
           {activeTab === 'workflow' && (
             <div className="max-w-4xl mx-auto">
               <h2 className="text-2xl font-bold mb-2">Game Dev Workflow</h2>
-              <p className="text-gray-400 mb-8">How assets flow from AssetForge to your game engine</p>
+              <p className="text-gray-400 mb-8">How to use generated assets in your game</p>
 
               <div className="space-y-4">
-                {/* Workflow Steps */}
                 {[
-                  {
-                    step: 1,
-                    title: 'Generate Asset',
-                    desc: 'Upload image → AI converts to 3D model with textures and optional rigging',
-                    status: 'active',
-                    icon: Zap,
-                    color: 'blue',
-                  },
-                  {
-                    step: 2,
-                    title: 'Review & Refine',
-                    desc: 'Preview in 3D viewer, check topology, adjust quality if needed',
-                    status: 'pending',
-                    icon: Eye,
-                    color: 'purple',
-                  },
-                  {
-                    step: 3,
-                    title: 'Export for Engine',
-                    desc: 'Export as GLB/FBX with proper scale, materials, and skeleton data',
-                    status: 'pending',
-                    icon: Download,
-                    color: 'green',
-                  },
-                  {
-                    step: 4,
-                    title: 'Import to Game',
-                    desc: 'Drop into Unity/Unreal/Godot. Configure animations, physics, behaviors.',
-                    status: 'pending',
-                    icon: Play,
-                    color: 'orange',
-                  },
-                  {
-                    step: 5,
-                    title: 'AI Integration',
-                    desc: 'Asset data sent to coding session for behavior scripting & game logic',
-                    status: 'pending',
-                    icon: FileCode,
-                    color: 'pink',
-                  },
+                  { step: 1, title: 'Generate Asset Here', desc: 'Upload image → Tripo AI creates real 3D model with PBR textures', icon: Zap, color: 'blue' },
+                  { step: 2, title: 'Preview & Download', desc: 'View the real 3D model in the viewer, then download the .glb file', icon: Download, color: 'purple' },
+                  { step: 3, title: 'Import to Game Engine', desc: 'Drop the GLB into Unity, Unreal, Godot, or Three.js project', icon: Play, color: 'green' },
+                  { step: 4, title: 'Tell the Coding AI', desc: 'Pass the asset info to your coding session to set up behavior, physics, animations', icon: FileCode, color: 'orange' },
                 ].map((item, i) => (
                   <div key={i} className="flex gap-4">
                     <div className="flex flex-col items-center">
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                        item.status === 'active' ? `bg-${item.color}-500/20 border border-${item.color}-500/50` : 'bg-gray-800 border border-gray-700'
-                      }`}>
-                        <item.icon size={18} className={item.status === 'active' ? 'text-blue-400' : 'text-gray-500'} />
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-blue-500/20 border border-blue-500/50">
+                        <item.icon size={18} className="text-blue-400" />
                       </div>
-                      {i < 4 && <div className="w-0.5 h-8 bg-gray-800 mt-2" />}
+                      {i < 3 && <div className="w-0.5 h-8 bg-gray-800 mt-2" />}
                     </div>
                     <div className="pb-6">
                       <h4 className="font-semibold">{item.title}</h4>
@@ -597,46 +620,16 @@ export default function App() {
               <div className="mt-8 bg-gray-900/50 border border-gray-800 rounded-2xl p-6">
                 <h3 className="font-semibold mb-4 flex items-center gap-2">
                   <FileCode size={18} className="text-blue-400" />
-                  Integration with AI Coding Session
+                  Example: Hand off to Coding AI
                 </h3>
                 <div className="bg-gray-950 rounded-xl p-4 font-mono text-sm overflow-x-auto">
-                  <p className="text-gray-500">// When you're ready, tell the coding AI:</p>
-                  <p className="text-green-400 mt-2">"Here's the fish asset from AssetForge:</p>
-                  <p className="text-green-400">- File: fish_model.glb</p>
-                  <p className="text-green-400">- Vertices: 4,200 | Triangles: 7,800</p>
-                  <p className="text-green-400">- Has skeleton: Yes (swim animation rig)</p>
-                  <p className="text-green-400">- Category: creatures</p>
-                  <p className="text-green-400">Please add it to the game with swimming AI behavior."</p>
-                  <p className="text-gray-500 mt-4">// The coding session will then:</p>
-                  <p className="text-blue-400">1. Import the GLB into the game project</p>
-                  <p className="text-blue-400">2. Set up the skeleton & animation controller</p>
-                  <p className="text-blue-400">3. Add movement AI (swimming patterns)</p>
-                  <p className="text-blue-400">4. Configure collision & physics</p>
-                  <p className="text-blue-400">5. Spawn it in the game world</p>
-                </div>
-              </div>
-
-              {/* API Connection */}
-              <div className="mt-6 bg-gray-900/50 border border-gray-800 rounded-2xl p-6">
-                <h3 className="font-semibold mb-4 flex items-center gap-2">
-                  <Settings size={18} className="text-purple-400" />
-                  Supported 3D Generation APIs
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {[
-                    { name: 'Tripo AI', desc: 'Fast image-to-3D, great for creatures', url: 'tripo3d.ai', status: 'Recommended' },
-                    { name: 'Meshy', desc: 'High quality with PBR textures', url: 'meshy.ai', status: 'Available' },
-                    { name: 'CSM (Common Sense Machines)', desc: 'Open source, self-hostable', url: 'csm.ai', status: 'Available' },
-                  ].map(api => (
-                    <div key={api.name} className="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
-                      <div className="flex items-center justify-between mb-2">
-                        <h4 className="font-medium text-sm">{api.name}</h4>
-                        <span className="text-xs bg-green-500/10 text-green-400 px-2 py-0.5 rounded-full">{api.status}</span>
-                      </div>
-                      <p className="text-xs text-gray-400 mb-2">{api.desc}</p>
-                      <p className="text-xs text-blue-400">{api.url}</p>
-                    </div>
-                  ))}
+                  <p className="text-gray-500">// After downloading the GLB, tell your coding AI:</p>
+                  <p className="text-green-400 mt-2">"I generated a 3D fish model using AssetForge.</p>
+                  <p className="text-green-400">File: fish.glb (downloaded from the Library tab)</p>
+                  <p className="text-green-400">Please add it to the game with:</p>
+                  <p className="text-green-400">- Swimming animation behavior</p>
+                  <p className="text-green-400">- Collision detection</p>
+                  <p className="text-green-400">- Spawn in the ocean area"</p>
                 </div>
               </div>
             </div>
@@ -645,61 +638,53 @@ export default function App() {
           {activeTab === 'settings' && (
             <div className="max-w-2xl mx-auto">
               <h2 className="text-2xl font-bold mb-2">Settings</h2>
-              <p className="text-gray-400 mb-8">Configure your 3D generation pipeline</p>
+              <p className="text-gray-400 mb-8">Configure your Tripo AI connection</p>
 
               <div className="space-y-6">
-                {/* API Provider */}
-                <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-6">
-                  <h3 className="font-semibold mb-4">3D Generation Provider</h3>
-                  <div className="grid grid-cols-3 gap-3 mb-4">
-                    {[
-                      { id: 'tripo', name: 'Tripo AI', desc: 'Best overall' },
-                      { id: 'meshy', name: 'Meshy', desc: 'Best textures' },
-                      { id: 'csm', name: 'CSM', desc: 'Open source' },
-                    ].map(p => (
-                      <button
-                        key={p.id}
-                        onClick={() => setSettings(s => ({ ...s, provider: p.id as any }))}
-                        className={`p-3 rounded-xl border text-left transition ${
-                          settings.provider === p.id
-                            ? 'border-blue-500 bg-blue-500/10'
-                            : 'border-gray-700 hover:border-gray-600'
-                        }`}
-                      >
-                        <p className="font-medium text-sm">{p.name}</p>
-                        <p className="text-xs text-gray-500">{p.desc}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
                 {/* API Key */}
                 <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-6">
-                  <h3 className="font-semibold mb-4">API Key</h3>
-                  <div>
-                    <label className="text-sm text-gray-400 mb-1.5 block">
-                      {settings.provider.charAt(0).toUpperCase() + settings.provider.slice(1)} API Key
-                    </label>
+                  <h3 className="font-semibold mb-4 flex items-center gap-2">
+                    <Key size={18} className="text-yellow-400" />
+                    Tripo AI API Key
+                  </h3>
+                  <div className="relative">
                     <input
-                      type="password"
+                      type={showApiKey ? 'text' : 'password'}
                       value={settings.apiKey}
                       onChange={(e) => setSettings(s => ({ ...s, apiKey: e.target.value }))}
-                      placeholder="Enter your API key..."
-                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition"
+                      placeholder="tsk_..."
+                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 pr-20 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition font-mono text-sm"
                     />
-                    <p className="text-xs text-gray-500 mt-2">
-                      Get your API key from{' '}
-                      <a href="https://www.tripo3d.ai" target="_blank" rel="noopener" className="text-blue-400 hover:underline">
-                        tripo3d.ai
-                      </a>
-                      {' '}dashboard
+                    <button
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-gray-700"
+                    >
+                      {showApiKey ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <a
+                      href="https://platform.tripo3d.ai/api-keys"
+                      target="_blank"
+                      rel="noopener"
+                      className="text-sm text-blue-400 hover:text-blue-300 flex items-center gap-1"
+                    >
+                      Get your API key <ExternalLink size={12} />
+                    </a>
+                    <span className="text-xs text-gray-600">• Free tier available</span>
+                  </div>
+                  <div className="mt-3 p-3 bg-gray-800/50 rounded-lg">
+                    <p className="text-xs text-gray-400">
+                      <strong className="text-gray-300">How it works:</strong> Your API key is stored locally in your browser. 
+                      When you generate a model, the image is sent directly from your browser to Tripo's API. 
+                      No backend server is involved — your key never leaves your device except to talk to Tripo.
                     </p>
                   </div>
                 </div>
 
                 {/* Defaults */}
                 <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-6">
-                  <h3 className="font-semibold mb-4">Default Settings</h3>
+                  <h3 className="font-semibold mb-4">Default Generation Settings</h3>
                   <div className="space-y-4">
                     <div>
                       <label className="text-sm text-gray-400 mb-1.5 block">Default Quality</label>
@@ -708,29 +693,29 @@ export default function App() {
                         onChange={(e) => setSettings(s => ({ ...s, quality: e.target.value as any }))}
                         className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500 transition"
                       >
-                        <option value="draft">Draft (fast, low poly)</option>
-                        <option value="standard">Standard (balanced)</option>
-                        <option value="high">High (detailed, slower)</option>
+                        <option value="draft">Draft (5K faces, fast)</option>
+                        <option value="standard">Standard (adaptive)</option>
+                        <option value="high">High (200K faces, detailed)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-sm text-gray-400 mb-1.5 block">Default Model Version</label>
+                      <select
+                        value={settings.modelVersion}
+                        onChange={(e) => setSettings(s => ({ ...s, modelVersion: e.target.value }))}
+                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500 transition"
+                      >
+                        <option value="P1-20260311">P1 (Best low-poly, ~2s)</option>
+                        <option value="v3.1-20260211">v3.1 (Latest, highest quality)</option>
+                        <option value="v3.0-20250812">v3.0 (High quality)</option>
+                        <option value="v2.5-20250123">v2.5 (Stable default)</option>
+                        <option value="Turbo-v1.0-20250506">Turbo (Fastest)</option>
                       </select>
                     </div>
                     <label className="flex items-center justify-between">
                       <div>
-                        <p className="text-sm text-gray-300">Auto-rig by default</p>
-                        <p className="text-xs text-gray-500">Add skeleton to creatures & characters</p>
-                      </div>
-                      <div
-                        onClick={() => setSettings(s => ({ ...s, autoRig: !s.autoRig }))}
-                        className={`w-11 h-6 rounded-full transition-colors relative cursor-pointer ${
-                          settings.autoRig ? 'bg-blue-600' : 'bg-gray-700'
-                        }`}
-                      >
-                        <div className="absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform" style={{ transform: settings.autoRig ? 'translateX(20px)' : 'translateX(0)', left: '2px' }} />
-                      </div>
-                    </label>
-                    <label className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm text-gray-300">Auto-texture by default</p>
-                        <p className="text-xs text-gray-500">Generate PBR textures from source image</p>
+                        <p className="text-sm text-gray-300">PBR Textures by default</p>
+                        <p className="text-xs text-gray-500">Generate physically-based materials</p>
                       </div>
                       <div
                         onClick={() => setSettings(s => ({ ...s, autoTexture: !s.autoTexture }))}
@@ -744,10 +729,66 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Save */}
-                <button className="w-full py-3 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl font-semibold text-sm hover:from-blue-500 hover:to-purple-500 transition shadow-lg shadow-blue-600/20">
-                  Save Settings
-                </button>
+                {/* Status */}
+                <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-6">
+                  <h3 className="font-semibold mb-4">Connection Status</h3>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className={`w-3 h-3 rounded-full ${settings.apiKey ? 'bg-green-400' : 'bg-red-400'}`} />
+                    <span className="text-sm text-gray-300">
+                      {settings.apiKey ? 'API Key configured' : 'No API key set'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-4">
+                    {settings.apiKey 
+                      ? `Key: ${settings.apiKey.trim().slice(0, 8)}...${settings.apiKey.trim().slice(-4)}` 
+                      : 'Get a free key at platform.tripo3d.ai'}
+                  </p>
+                  
+                  {settings.apiKey && (
+                    <button
+                      onClick={async () => {
+                        setError(null)
+                        try {
+                          const res = await fetch('/api/tripo/wallet', {
+                            headers: { 'Authorization': `Bearer ${settings.apiKey.trim()}` }
+                          })
+                          if (res.ok) {
+                            const data = await res.json()
+                            setError(`✅ API key is valid! Balance: ${JSON.stringify(data.data)}`)
+                          } else {
+                            const text = await res.text()
+                            setError(`❌ API key test failed (${res.status}): ${text}`)
+                          }
+                        } catch (err: any) {
+                          setError(`❌ Connection test failed: ${err.message}. Make sure you're running "node server.js" locally.`)
+                        }
+                      }}
+                      className="w-full py-2 bg-blue-600 rounded-lg text-sm font-medium hover:bg-blue-500 transition"
+                    >
+                      Test API Connection
+                    </button>
+                  )}
+                </div>
+
+                <div className="p-4 bg-green-500/5 border border-green-500/20 rounded-xl">
+                  <p className="text-sm text-green-300 mb-3">
+                    🖥️ <strong>Running Locally (recommended):</strong>
+                  </p>
+                  <div className="bg-gray-950 rounded-lg p-3 font-mono text-xs space-y-1">
+                    <p className="text-gray-400"># 1. Download project files to your computer</p>
+                    <p className="text-gray-400"># 2. Install dependencies:</p>
+                    <p className="text-green-400">npm install</p>
+                    <p className="text-gray-400"># 3. Build the app:</p>
+                    <p className="text-green-400">npm run build</p>
+                    <p className="text-gray-400"># 4. Run the local server (proxies API calls):</p>
+                    <p className="text-green-400">node server.js</p>
+                    <p className="text-gray-400"># 5. Open http://localhost:3000</p>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-3">
+                    The <code className="bg-gray-800 px-1 rounded">server.js</code> file proxies your API calls to Tripo, 
+                    which avoids CORS errors. This is required for generation to work.
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -759,41 +800,38 @@ export default function App() {
             <h3 className="font-semibold text-sm flex items-center gap-2">
               <Box size={16} className="text-blue-400" />
               3D Preview
+              {selectedAsset?.status === 'ready' && (
+                <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">Live Model</span>
+              )}
+              {selectedAsset?.status === 'processing' && (
+                <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full">Generating...</span>
+              )}
             </h3>
-            <div className="flex gap-2">
-              <button className="text-xs bg-gray-800 px-2 py-1 rounded text-gray-400 hover:text-white transition">Wireframe</button>
-              <button className="text-xs bg-gray-800 px-2 py-1 rounded text-gray-400 hover:text-white transition">Textured</button>
-            </div>
           </div>
           <div className="flex-1">
-            <Viewer3D asset={selectedAsset} />
+            <Viewer3D 
+              modelUrl={selectedAsset?.status === 'ready' ? selectedAsset.modelUrl : null} 
+              isDemo={!selectedAsset || selectedAsset.status !== 'ready'}
+            />
           </div>
-          {selectedAsset && (
+          {selectedAsset && selectedAsset.status === 'ready' && (
             <div className="p-4 border-t border-gray-800 space-y-3">
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div className="bg-gray-800/50 rounded-lg p-2">
-                  <p className="text-gray-500">Vertices</p>
-                  <p className="font-medium">{selectedAsset.vertices?.toLocaleString()}</p>
-                </div>
-                <div className="bg-gray-800/50 rounded-lg p-2">
-                  <p className="text-gray-500">Triangles</p>
-                  <p className="font-medium">{selectedAsset.triangles?.toLocaleString()}</p>
-                </div>
+              <div className="bg-gray-800/50 rounded-lg p-3">
+                <p className="text-sm font-medium">{selectedAsset.name}</p>
+                <p className="text-xs text-gray-500 capitalize mt-0.5">{selectedAsset.category}</p>
+                {selectedAsset.taskId && (
+                  <p className="text-xs text-gray-600 mt-1 font-mono">Task: {selectedAsset.taskId.slice(0, 8)}...</p>
+                )}
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => exportAsset(selectedAsset, 'glb')}
-                  className="flex-1 py-2 bg-blue-600 rounded-lg text-xs font-medium hover:bg-blue-500 transition flex items-center justify-center gap-1"
-                >
-                  <Download size={12} /> Export GLB
-                </button>
-                <button
-                  onClick={() => exportAsset(selectedAsset, 'fbx')}
-                  className="flex-1 py-2 bg-gray-800 rounded-lg text-xs font-medium hover:bg-gray-700 transition flex items-center justify-center gap-1"
-                >
-                  <Download size={12} /> Export FBX
-                </button>
-              </div>
+              <button
+                onClick={() => exportModel(selectedAsset, 'glb')}
+                className="w-full py-2.5 bg-blue-600 rounded-lg text-sm font-medium hover:bg-blue-500 transition flex items-center justify-center gap-2"
+              >
+                <Download size={14} /> Download .glb Model
+              </button>
+              <p className="text-xs text-gray-500 text-center">
+                Import this file into your game engine
+              </p>
             </div>
           )}
         </div>
