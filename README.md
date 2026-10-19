@@ -1,6 +1,27 @@
-# AssetForge - Image to 3D Game Asset Pipeline
+# 🎮 AssetForge - Image to 3D Game Asset Pipeline
 
-A web app that converts images into game-ready 3D models using the Tripo AI API.
+A web app that converts images into game-ready 3D models. **Two options:**
+
+## 🚀 Choose Your Setup
+
+### Option 1: Cloud API (Easiest)
+- ✅ No GPU required
+- ✅ Works on any computer  
+- ❌ Costs money (~$0.10-0.15 per model)
+- ❌ Requires internet
+- **Best for**: Quick testing, low-volume use
+
+**Setup**: See instructions below
+
+### Option 2: Local GPU (Free & Unlimited) ⭐
+- ✅ **Completely free**
+- ✅ **Unlimited generations**
+- ✅ Works offline
+- ✅ Faster (2-10 seconds)
+- ❌ Requires NVIDIA GPU with 6GB+ VRAM
+- **Best for**: Heavy use, game development
+
+**Setup**: See [backend/LOCAL_GPU_GUIDE.md](backend/LOCAL_GPU_GUIDE.md)
 
 ## How to Run Locally
 
