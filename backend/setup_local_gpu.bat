@@ -67,10 +67,19 @@ REM Install PyTorch with CUDA
 echo [3/7] Installing PyTorch with CUDA support...
 echo (This is a large download, about 2GB)
 echo.
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+echo Trying CUDA 11.8 first (most compatible)...
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
 if %ERRORLEVEL% NEQ 0 (
-    echo [WARNING] CUDA installation failed, trying CPU version...
-    pip install torch torchvision
+    echo.
+    echo CUDA 11.8 failed, trying CUDA 12.1...
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+    
+    if %ERRORLEVEL% NEQ 0 (
+        echo.
+        echo CUDA 12.1 failed, trying default PyPI...
+        pip install torch torchvision
+    )
 )
 echo.
 
