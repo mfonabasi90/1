@@ -21,6 +21,7 @@ const __dirname = path.dirname(__filename);
 
 const PORT = process.env.PORT || 3000;
 const TRIP_API_HOST = 'api.tripo3d.ai';
+const MESHY_API_HOST = 'api.meshy.ai';
 
 // MIME types for serving static files
 const MIME_TYPES = {
@@ -39,17 +40,17 @@ const MIME_TYPES = {
   '.gltf': 'model/gltf+json',
 };
 
-// Proxy request to Tripo API
-function proxyToTripo(req, res, body) {
-  const urlPath = req.url.replace('/api/tripo', '');
+// Generic proxy function
+function proxyRequest(req, res, body, targetHost, pathPrefix) {
+  const urlPath = req.url.replace(pathPrefix, '');
   
   const options = {
-    hostname: TRIP_API_HOST,
-    path: `/v2/openapi${urlPath}`,
+    hostname: targetHost,
+    path: urlPath,
     method: req.method,
     headers: {
       ...req.headers,
-      host: TRIP_API_HOST,
+      host: targetHost,
     },
   };
 
@@ -82,16 +83,16 @@ function proxyToTripo(req, res, body) {
 }
 
 // Handle multipart upload proxy (special case for file uploads)
-function proxyUploadToTripo(req, res) {
-  const urlPath = req.url.replace('/api/tripo', '');
+function proxyUpload(req, res, targetHost, pathPrefix) {
+  const urlPath = req.url.replace(pathPrefix, '');
   
   const options = {
-    hostname: TRIP_API_HOST,
-    path: `/v2/openapi${urlPath}`,
+    hostname: targetHost,
+    path: urlPath,
     method: req.method,
     headers: {
       ...req.headers,
-      host: TRIP_API_HOST,
+      host: targetHost,
     },
   };
 
@@ -175,16 +176,26 @@ const server = http.createServer((req, res) => {
     console.log(`[PROXY] ${req.method} ${req.url} → ${TRIP_API_HOST}`);
     
     if (req.headers['content-type']?.includes('multipart/form-data')) {
-      // Stream the multipart upload directly
-      proxyUploadToTripo(req, res);
+      proxyUpload(req, res, TRIP_API_HOST, '/api/tripo');
     } else {
-      // Buffer JSON requests
       let body = '';
       req.on('data', chunk => { body += chunk; });
       req.on('end', () => {
-        proxyToTripo(req, res, body || null);
+        proxyRequest(req, res, body || null, TRIP_API_HOST, '/api/tripo');
       });
     }
+    return;
+  }
+
+  // Proxy API requests to Meshy
+  if (req.url.startsWith('/api/meshy')) {
+    console.log(`[PROXY] ${req.method} ${req.url} → ${MESHY_API_HOST}`);
+    
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      proxyRequest(req, res, body || null, MESHY_API_HOST, '/api/meshy');
+    });
     return;
   }
 
