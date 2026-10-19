@@ -35,7 +35,7 @@ try:
     from fastapi.responses import FileResponse, JSONResponse
     import uvicorn
 except ImportError as e:
-    print(f"\n❌ Missing dependency: {e}")
+    print(f"\n[ERROR] Missing dependency: {e}")
     print("\nPlease run the setup script first:")
     print("  Windows: setup_local_gpu.bat")
     print("  Linux/Mac: bash setup_local_gpu.sh")
@@ -84,7 +84,7 @@ def load_triposr_model():
         return
     
     device = get_device()
-    print(f"\n🔄 Loading TripoSR model on {device}...")
+    print(f"\n[INFO] Loading TripoSR model on {device}...")
     start = time.time()
     
     try:
@@ -106,10 +106,10 @@ def load_triposr_model():
         model_state["loaded"] = True
         model_state["load_time"] = time.time() - start
         
-        print(f"✅ TripoSR loaded in {model_state['load_time']:.1f}s on {device}")
+        print(f"[OK] TripoSR loaded in {model_state['load_time']:.1f}s on {device}")
         
     except Exception as e:
-        print(f"❌ Failed to load TripoSR: {e}")
+        print(f"[ERROR] Failed to load TripoSR: {e}")
         print("\nMake sure you've run the setup script and downloaded the model.")
         print(f"Expected TripoSR at: {TRIPOSR_DIR}/")
         raise
@@ -156,7 +156,7 @@ def generate_mesh(image: Image.Image, chunk_size: int = 8192) -> str:
     elif "mps" in str(device):
         image_tensor = image_tensor.to(device)
     
-    print(f"🎨 Generating 3D mesh...")
+    print(f"[INFO] Generating 3D mesh...")
     start = time.time()
     
     with torch.no_grad():
@@ -166,7 +166,7 @@ def generate_mesh(image: Image.Image, chunk_size: int = 8192) -> str:
     meshes = model.extract_mesh(scene_codes, resolution=256)
     
     gen_time = time.time() - start
-    print(f"✅ Mesh generated in {gen_time:.2f}s")
+    print(f"[OK] Mesh generated in {gen_time:.2f}s")
     
     # Save as GLB
     task_id = str(uuid.uuid4())
@@ -283,27 +283,24 @@ async def list_models():
 
 if __name__ == "__main__":
     print("""
-╔══════════════════════════════════════════════════════════╗
-║                                                          ║
-║   🎮 AssetForge Local GPU Backend                        ║
-║                                                          ║
-║   Running on: http://localhost:8000                      ║
-║                                                          ║
-╚══════════════════════════════════════════════════════════╝
+============================================================
+  AssetForge Local GPU Backend
+  Running on: http://localhost:8000
+============================================================
     """)
     
     device = get_device()
-    print(f"🖥️  Device: {device}")
+    print(f"[INFO] Device: {device}")
     if torch.cuda.is_available():
-        print(f"🎮 GPU: {torch.cuda.get_device_name(0)}")
+        print(f"[OK] GPU: {torch.cuda.get_device_name(0)}")
         vram = torch.cuda.get_device_properties(0).total_mem / (1024**3)
-        print(f"💾 VRAM: {vram:.1f} GB")
+        print(f"[OK] VRAM: {vram:.1f} GB")
         if vram < 6:
-            print("⚠️  Warning: Less than 6GB VRAM. Model may not fit!")
+            print("[WARNING] Less than 6GB VRAM. Model may not fit!")
     else:
-        print("⚠️  No GPU detected! Will run on CPU (very slow)")
+        print("[WARNING] No GPU detected! Will run on CPU (very slow)")
     
-    print("\n📡 API endpoints:")
+    print("\n[INFO] API endpoints:")
     print("   GET  /           - Server info")
     print("   POST /load-model - Load TripoSR into GPU memory")
     print("   POST /generate   - Generate 3D from image")
