@@ -156,7 +156,17 @@ export default function App() {
       setUploadedFile(null)
       setAssetName('')
     } catch (err: any) {
-      const errorMsg = err.message || 'Generation failed'
+      let errorMsg = err.message || 'Generation failed'
+      
+      // Give helpful guidance for common errors
+      if (errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('CORS')) {
+        errorMsg = 'Cannot connect to Tripo API (CORS error). You need to run this app locally with "node server.js" to proxy the API calls. See Settings tab for instructions.'
+      } else if (errorMsg.includes('401') || errorMsg.includes('Unauthorized')) {
+        errorMsg = 'Invalid API key. Check your Tripo API key in Settings.'
+      } else if (errorMsg.includes('429')) {
+        errorMsg = 'Rate limit exceeded. Wait a moment and try again, or check your Tripo credit balance.'
+      }
+      
       setError(errorMsg)
       setAssets(prev => prev.map(a => 
         a.id === newAsset.id 
@@ -729,12 +739,23 @@ export default function App() {
                   </p>
                 </div>
 
-                <div className="p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl">
-                  <p className="text-sm text-blue-300">
-                    💡 <strong>Note about CORS:</strong> If you get a CORS error when generating, 
-                    it means Tripo's API doesn't allow direct browser requests. In that case, you'd need to 
-                    run a small proxy server, or use the Tripo dashboard directly and import the models here.
-                    Most users find the direct API works fine from the browser.
+                <div className="p-4 bg-green-500/5 border border-green-500/20 rounded-xl">
+                  <p className="text-sm text-green-300 mb-3">
+                    🖥️ <strong>Running Locally (recommended):</strong>
+                  </p>
+                  <div className="bg-gray-950 rounded-lg p-3 font-mono text-xs space-y-1">
+                    <p className="text-gray-400"># 1. Download project files to your computer</p>
+                    <p className="text-gray-400"># 2. Install dependencies:</p>
+                    <p className="text-green-400">npm install</p>
+                    <p className="text-gray-400"># 3. Build the app:</p>
+                    <p className="text-green-400">npm run build</p>
+                    <p className="text-gray-400"># 4. Run the local server (proxies API calls):</p>
+                    <p className="text-green-400">node server.js</p>
+                    <p className="text-gray-400"># 5. Open http://localhost:3000</p>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-3">
+                    The <code className="bg-gray-800 px-1 rounded">server.js</code> file proxies your API calls to Tripo, 
+                    which avoids CORS errors. This is required for generation to work.
                   </p>
                 </div>
               </div>

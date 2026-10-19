@@ -1,7 +1,40 @@
 // Tripo AI API Service
 // Handles image upload → 3D model generation → model retrieval
+// Uses /api/tripo proxy when running via server.js (avoids CORS)
+// Falls back to direct API if proxy isn't available
 
-const TRIP_API_BASE = 'https://api.tripo3d.ai/v2/openapi';
+const PROXY_BASE = '/api/tripo';
+const DIRECT_BASE = 'https://api.tripo3d.ai/v2/openapi';
+
+// Detect if proxy is available
+let apiBase: string | null = null;
+
+async function getApiBase(): Promise<string> {
+  if (apiBase) return apiBase;
+  
+  // Try the proxy first (quick check)
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    
+    const res = await fetch(`${PROXY_BASE}/wallet`, { 
+      method: 'GET',
+      headers: { 'Authorization': 'Bearer probe' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    
+    // If we get any response (even 401), the proxy is working
+    apiBase = PROXY_BASE;
+    console.log('[TripoAPI] Using local proxy');
+  } catch {
+    // Proxy not available, use direct API
+    apiBase = DIRECT_BASE;
+    console.log('[TripoAPI] Proxy not available, using direct API (may have CORS issues)');
+  }
+  
+  return apiBase;
+}
 
 export interface TripoTask {
   task_id: string;
@@ -30,10 +63,12 @@ export interface GenerationOptions {
  * Upload an image file to Tripo and get a file token
  */
 export async function uploadImage(apiKey: string, file: File): Promise<string> {
+  const base = await getApiBase();
+  
   const formData = new FormData();
   formData.append('file', file);
 
-  const response = await fetch(`${TRIP_API_BASE}/upload/sts`, {
+  const response = await fetch(`${base}/upload/sts`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -62,6 +97,7 @@ export async function createImageToModelTask(
   fileToken: string,
   options: GenerationOptions
 ): Promise<string> {
+  const base = await getApiBase();
   const modelVersion = options.modelVersion || 'v2.5-20250123';
   
   const body: Record<string, any> = {
@@ -80,10 +116,12 @@ export async function createImageToModelTask(
     body.face_limit = 5000;
   } else if (options.quality === 'high') {
     body.face_limit = 200000;
-    body.geometry_quality = 'detailed';
+    if (modelVersion >= 'v3.0') {
+      body.geometry_quality = 'detailed';
+    }
   }
 
-  const response = await fetch(`${TRIP_API_BASE}/task`, {
+  const response = await fetch(`${base}/task`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -109,7 +147,9 @@ export async function createImageToModelTask(
  * Poll a task for its current status
  */
 export async function getTaskStatus(apiKey: string, taskId: string): Promise<TripoTask> {
-  const response = await fetch(`${TRIP_API_BASE}/task/${taskId}`, {
+  const base = await getApiBase();
+  
+  const response = await fetch(`${base}/task/${taskId}`, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -155,24 +195,13 @@ export async function pollTaskUntilComplete(
           // Still running, poll again
           setTimeout(poll, intervalMs);
         }
-      } catch (error) {
+      } catch (error: any) {
         reject(error);
       }
     };
 
     poll();
   });
-}
-
-/**
- * Download a model file from URL and return as Blob
- */
-export async function downloadModel(modelUrl: string): Promise<Blob> {
-  const response = await fetch(modelUrl);
-  if (!response.ok) {
-    throw new Error(`Failed to download model: ${response.status}`);
-  }
-  return response.blob();
 }
 
 /**
