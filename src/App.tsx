@@ -90,12 +90,18 @@ export default function App() {
   }, [])
 
   const startGeneration = useCallback(async () => {
-    if (!uploadedFile || !settings.apiKey) {
-      if (!settings.apiKey) {
+    // Trim the API key to remove any accidental whitespace
+    const trimmedKey = settings.apiKey.trim()
+    if (!uploadedFile || !trimmedKey) {
+      if (!trimmedKey) {
         setError('Please add your Tripo API key in Settings first!')
         setActiveTab('settings')
       }
       return
+    }
+    // Update settings with trimmed key
+    if (trimmedKey !== settings.apiKey) {
+      setSettings(s => ({ ...s, apiKey: trimmedKey }))
     }
 
     setIsProcessing(true)
@@ -126,7 +132,7 @@ export default function App() {
       }
 
       const result = await generate3DFromImage(
-        settings.apiKey,
+        trimmedKey,
         uploadedFile,
         options,
         (progress, stage) => {
@@ -161,8 +167,8 @@ export default function App() {
       // Give helpful guidance for common errors
       if (errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('CORS')) {
         errorMsg = 'Cannot connect to Tripo API (CORS error). You need to run this app locally with "node server.js" to proxy the API calls. See Settings tab for instructions.'
-      } else if (errorMsg.includes('401') || errorMsg.includes('Unauthorized')) {
-        errorMsg = 'Invalid API key. Check your Tripo API key in Settings.'
+      } else if (errorMsg.includes('401') || errorMsg.includes('Unauthorized') || errorMsg.includes('Invalid API key')) {
+        errorMsg = `Invalid API key. Tripo says: "${errorMsg}". Make sure your key starts with "tsk_" and has no extra spaces.`
       } else if (errorMsg.includes('429')) {
         errorMsg = 'Rate limit exceeded. Wait a moment and try again, or check your Tripo credit balance.'
       }
@@ -726,17 +732,42 @@ export default function App() {
                 {/* Status */}
                 <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-6">
                   <h3 className="font-semibold mb-4">Connection Status</h3>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 mb-3">
                     <div className={`w-3 h-3 rounded-full ${settings.apiKey ? 'bg-green-400' : 'bg-red-400'}`} />
                     <span className="text-sm text-gray-300">
                       {settings.apiKey ? 'API Key configured' : 'No API key set'}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-500 mt-2">
+                  <p className="text-xs text-gray-500 mb-4">
                     {settings.apiKey 
-                      ? `Key: ${settings.apiKey.slice(0, 8)}...${settings.apiKey.slice(-4)}` 
+                      ? `Key: ${settings.apiKey.trim().slice(0, 8)}...${settings.apiKey.trim().slice(-4)}` 
                       : 'Get a free key at platform.tripo3d.ai'}
                   </p>
+                  
+                  {settings.apiKey && (
+                    <button
+                      onClick={async () => {
+                        setError(null)
+                        try {
+                          const res = await fetch('/api/tripo/wallet', {
+                            headers: { 'Authorization': `Bearer ${settings.apiKey.trim()}` }
+                          })
+                          if (res.ok) {
+                            const data = await res.json()
+                            setError(`✅ API key is valid! Balance: ${JSON.stringify(data.data)}`)
+                          } else {
+                            const text = await res.text()
+                            setError(`❌ API key test failed (${res.status}): ${text}`)
+                          }
+                        } catch (err: any) {
+                          setError(`❌ Connection test failed: ${err.message}. Make sure you're running "node server.js" locally.`)
+                        }
+                      }}
+                      className="w-full py-2 bg-blue-600 rounded-lg text-sm font-medium hover:bg-blue-500 transition"
+                    >
+                      Test API Connection
+                    </button>
+                  )}
                 </div>
 
                 <div className="p-4 bg-green-500/5 border border-green-500/20 rounded-xl">
